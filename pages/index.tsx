@@ -4,366 +4,317 @@ import { useEffect, useRef, useState } from 'react'
 
 export default function SpaceGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const mobileControls = useRef({ left: false, right: false, shoot: false })
+
   const [started, setStarted] = useState(false)
   const [restartKey, setRestartKey] = useState(0)
-  const [isGameOver, setIsGameOver] = useState(false)
-  const [newRecord, setNewRecord] = useState(false)
-  const [mobileControls, setMobileControls] = useState({ left: false, right: false, shoot: false })
+  const [gameOverUI, setGameOverUI] = useState(false)
 
   useEffect(() => {
     if (!started) return
 
-    setIsGameOver(false)
-    setNewRecord(false)
-
     const canvas = canvasRef.current!
     const ctx = canvas.getContext('2d')!
 
-    function resizeCanvas() {
+    const resize = () => {
       canvas.width = window.innerWidth
       canvas.height = window.innerHeight
     }
-    resizeCanvas()
-    window.addEventListener('resize', resizeCanvas)
+    resize()
+    window.addEventListener('resize', resize)
 
-    // ===== DETECT MOBILE =====
     const isMobile = window.innerWidth < 768
+    const scale = isMobile ? 0.6 : 0.85
+    const mobileBottomOffset = isMobile ? 100 : 0 // пространство для кнопок снизу
 
-    // ===== GAME STATE =====
+    /* ===== IMAGES ===== */
+    const shipImg = new Image()
+    const alienImg = new Image()
+    const asteroidImg = new Image()
+    shipImg.src = '/game/spaceship.png'
+    alienImg.src = '/game/alien.png'
+    asteroidImg.src = '/game/asteroid.png'
+    ctx.imageSmoothingEnabled = true
+
+    /* ===== GAME STATE ===== */
     let lives = 5
-    let tokens = 0
+    let score = 0
     let level = 1
     let gameOver = false
-    let shootCooldown = 0
+    let shootCD = 0
+    const HUD_H = 70
 
-    // ===== DYNAMIC SIZES =====
-    function getSizes() {
-      const w = canvas.width
-      const h = canvas.height
-      return {
-        hudHeight: Math.max(50, h * 0.08),
-        playerW: Math.max(40, w * (isMobile ? 0.12 : 0.07)),
-        playerH: Math.max(40, h * (isMobile ? 0.12 : 0.07)),
-        bulletW: Math.max(5, w * 0.015),
-        bulletH: Math.max(12, h * 0.03),
-        asteroidSize: Math.max(35, w * (isMobile ? 0.08 : 0.06)),
-        alienW: Math.max(80, w * (isMobile ? 0.18 : 0.15)),
-        alienH: Math.max(50, h * (isMobile ? 0.12 : 0.08)),
-        hudPadding: Math.max(10, w * 0.02),
-        speedScale: Math.max(6, w * (isMobile ? 0.004 : 0.008)),
-      }
-    }
-
-    let sizes = getSizes()
+    const S = () => ({
+      ship: 64 * scale,
+      asteroid: 72 * scale,
+      alienW: 140 * scale,
+      alienH: 90 * scale,
+      bulletW: 6 * scale,
+      bulletH: 16 * scale,
+    })
+    let sizes = S()
 
     const player = {
-      x: canvas.width / 2 - sizes.playerW / 2,
-      y: canvas.height - sizes.playerH - 90,
-      w: sizes.playerW,
-      h: sizes.playerH,
-      speed: sizes.speedScale,
+      x: canvas.width / 2 - sizes.ship / 2,
+      y: canvas.height - sizes.ship - 30 - mobileBottomOffset, // вот тут сдвиг
+      w: sizes.ship,
+      h: sizes.ship,
+      speed: (isMobile ? 6 : 8) * scale,
     }
 
-    type Bullet = { x: number; y: number; speed: number; w?: number; h?: number }
-    type Asteroid = { x: number; y: number; w: number; h: number; hp: number; speed: number }
-    type Alien = { x: number; y: number; w: number; h: number; hp: number; dir: number; speed: number; cd: number }
+    type Obj = {
+      x: number
+      y: number
+      w: number
+      h: number
+      hp?: number
+      speed?: number
+      dir?: number
+      cd?: number
+    }
 
-    const bullets: Bullet[] = []
-    const asteroids: Asteroid[] = []
-    const aliens: Alien[] = []
-    const enemyBullets: Bullet[] = []
+    const bullets: Obj[] = []
+    const asteroids: Obj[] = []
+    const aliens: Obj[] = []
+    const enemyBullets: Obj[] = []
 
     const keys: Record<string, boolean> = {}
-    const down = (e: KeyboardEvent) => (keys[e.code] = true)
-    const up = (e: KeyboardEvent) => (keys[e.code] = false)
-    window.addEventListener('keydown', down)
-    window.addEventListener('keyup', up)
+    const kd = (e: KeyboardEvent) => (keys[e.code] = true)
+    const ku = (e: KeyboardEvent) => (keys[e.code] = false)
+    window.addEventListener('keydown', kd)
+    window.addEventListener('keyup', ku)
 
-    const hit = (a: any, b: any) =>
-      a.x < b.x + b.w &&
-      a.x + (a.w || 4) > b.x &&
-      a.y < b.y + b.h &&
-      a.y + (a.h || 10) > b.y
+    const hit = (a: Obj, b: Obj) =>
+      a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 
-    function spawnAsteroid() {
-      // на мобилке меньше астероидов
-      if (isMobile && Math.random() > 0.5) return
+    const spawnAsteroid = () => {
+      if (isMobile && Math.random() > 0.6) return
       asteroids.push({
-        x: Math.random() * (canvas.width - sizes.asteroidSize),
-        y: -sizes.asteroidSize,
-        w: sizes.asteroidSize,
-        h: sizes.asteroidSize,
+        x: Math.random() * (canvas.width - sizes.asteroid),
+        y: HUD_H,
+        w: sizes.asteroid,
+        h: sizes.asteroid,
         hp: 4,
-        speed: 2 + level * (isMobile ? 0.15 : 0.3), // медленнее на мобилке
+        speed: (isMobile ? 1.5 : 2.6) + level * 0.3,
       })
     }
 
-    function spawnAlien() {
+    const spawnAlien = () => {
       aliens.length = 0
       aliens.push({
         x: canvas.width / 2 - sizes.alienW / 2,
-        y: sizes.hudHeight + 10,
+        y: HUD_H + 15,
         w: sizes.alienW,
         h: sizes.alienH,
         hp: 20,
         dir: 1,
-        speed: 2 + level * (isMobile ? 0.05 : 0.1), // медленнее на мобилке
+        speed: (isMobile ? 1 : 1.8) + level * 0.1,
         cd: 60,
       })
     }
 
     spawnAlien()
 
-    function shoot() {
+    const shoot = () => {
       bullets.push({
         x: player.x + player.w / 2 - sizes.bulletW / 2,
         y: player.y,
-        speed: 10,
         w: sizes.bulletW,
         h: sizes.bulletH,
+        speed: 10,
       })
     }
 
     function update() {
       if (gameOver) return
+      if (shootCD > 0) shootCD--
 
-      // MOBILE CONTROLS
-      if (mobileControls.left && player.x > 0) player.x -= player.speed
-      if (mobileControls.right && player.x + player.w < canvas.width) player.x += player.speed
-      if (mobileControls.shoot && shootCooldown === 0) {
+      if ((keys.ArrowLeft || mobileControls.current.left) && player.x > 0)
+        player.x -= player.speed
+      if ((keys.ArrowRight || mobileControls.current.right) && player.x + player.w < canvas.width)
+        player.x += player.speed
+
+      if ((keys.Space || mobileControls.current.shoot) && shootCD === 0) {
         shoot()
-        shootCooldown = 12
-      }
-
-      if (shootCooldown > 0) shootCooldown--
-
-      // KEYBOARD
-      if (keys.ArrowLeft && player.x > 0) player.x -= player.speed
-      if (keys.ArrowRight && player.x + player.w < canvas.width) player.x += player.speed
-      if (keys.Space && shootCooldown === 0) {
-        shoot()
-        shootCooldown = 12
+        shootCD = 12
       }
 
       if (Math.random() < 0.02 + level * 0.003) spawnAsteroid()
 
-      bullets.forEach(b => (b.y -= b.speed))
-      asteroids.forEach(a => (a.y += a.speed))
-      enemyBullets.forEach(b => (b.y += b.speed))
+      bullets.forEach(b => (b.y -= b.speed!))
+      asteroids.forEach(a => (a.y += a.speed!))
+      enemyBullets.forEach(b => (b.y += b.speed!))
 
       aliens.forEach(a => {
-        a.x += a.speed * a.dir
-        if (a.x <= 0 || a.x + a.w >= canvas.width) a.dir *= -1
-
-        a.cd--
-        if (a.cd <= 0) {
-          enemyBullets.push({
-            x: a.x + a.w / 2,
-            y: a.y + a.h,
-            speed: 5 + level * 0.2,
-            w: sizes.bulletW,
-            h: sizes.bulletH,
-          })
-          a.cd = 60 - Math.min(level * 3, 40)
+        a.x += a.speed! * a.dir!
+        if (a.x <= 0 || a.x + a.w >= canvas.width) a.dir! *= -1
+        a.cd!--
+        if (a.cd! <= 0) {
+          enemyBullets.push({ x: a.x + a.w / 2, y: a.y + a.h, w: 6, h: 16, speed: 5 })
+          a.cd = 60
         }
       })
 
-      for (let i = bullets.length - 1; i >= 0; i--) {
-        for (let j = asteroids.length - 1; j >= 0; j--) {
-          if (hit(bullets[i], asteroids[j])) {
-            asteroids[j].hp -= 2
-            bullets.splice(i, 1)
-            if (asteroids[j].hp <= 0) {
-              tokens++
-              asteroids.splice(j, 1)
+      bullets.forEach((b, bi) => {
+        asteroids.forEach((a, ai) => {
+          if (hit(b, a)) {
+            a.hp!--
+            bullets.splice(bi, 1)
+            if (a.hp! <= 0) {
+              score++
+              asteroids.splice(ai, 1)
             }
-            break
           }
-        }
-      }
-
-      for (let i = bullets.length - 1; i >= 0; i--) {
-        for (let j = aliens.length - 1; j >= 0; j--) {
-          if (hit(bullets[i], aliens[j])) {
-            aliens[j].hp -= 2
-            bullets.splice(i, 1)
-            if (aliens[j].hp <= 0) {
-              tokens += 2
-              aliens.splice(j, 1)
+        })
+        aliens.forEach((al, ai) => {
+          if (hit(b, al)) {
+            al.hp!--
+            bullets.splice(bi, 1)
+            if (al.hp! <= 0) {
+              score += 2
+              aliens.splice(ai, 1)
             }
-            break
           }
-        }
-      }
+        })
+      })
 
-      for (let i = asteroids.length - 1; i >= 0; i--) {
-        if (hit(asteroids[i], player)) {
+      asteroids.forEach((a, i) => {
+        if (hit(a, player)) {
           lives--
           asteroids.splice(i, 1)
         }
-      }
+      })
 
-      for (let i = enemyBullets.length - 1; i >= 0; i--) {
-        if (hit(enemyBullets[i], player)) {
+      enemyBullets.forEach((b, i) => {
+        if (hit(b, player)) {
           lives--
           enemyBullets.splice(i, 1)
         }
-      }
+      })
 
-      if (tokens >= level * 10) {
+      if (score >= level * 10) {
         level++
         spawnAlien()
       }
 
       if (lives <= 0) {
         gameOver = true
-        setIsGameOver(true)
-
-        const bestScore = parseInt(localStorage.getItem('bestScore') || '0', 10)
-        const bestLevel = parseInt(localStorage.getItem('bestLevel') || '0', 10)
-
-        if (tokens > bestScore || level > bestLevel) {
-          localStorage.setItem('bestScore', tokens.toString())
-          localStorage.setItem('bestLevel', level.toString())
-          setNewRecord(true)
-        }
+        setGameOverUI(true)
       }
     }
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-      sizes = getSizes() // обновляем размеры при ресайзе
+      sizes = S()
 
       // HUD
-      ctx.fillStyle = '#222'
-      ctx.fillRect(0, 0, Math.min(250, canvas.width * 0.35), sizes.hudHeight)
+      ctx.fillStyle = '#111'
+      ctx.fillRect(0, 0, canvas.width, HUD_H)
       ctx.fillStyle = 'white'
-      ctx.font = `${Math.max(16, sizes.hudHeight * 0.4)}px Arial`
-      ctx.textAlign = 'start'
-      ctx.fillText(`❤️ ${lives}`, sizes.hudPadding, sizes.hudHeight / 2)
-      ctx.fillText(`🆙 LVL ${level}`, sizes.hudPadding, sizes.hudHeight * 0.75)
-      ctx.fillText(`🎯 ${tokens}`, 120, sizes.hudHeight / 2)
+      ctx.font = '20px Arial'
+      ctx.fillText(`❤️ ${lives}`, 20, 45)
+      ctx.fillText(`LVL ${level}`, canvas.width / 2 - 30, 45)
+      ctx.fillText(`🎯 ${score}`, canvas.width - 120, 45)
 
-      // PLAYER
-      ctx.fillStyle = 'cyan'
-      ctx.fillRect(player.x, player.y, player.w, player.h)
+      if (shipImg.complete) ctx.drawImage(shipImg, player.x, player.y, player.w, player.h)
+      asteroids.forEach(a => { if (asteroidImg.complete) ctx.drawImage(asteroidImg, a.x, a.y, a.w, a.h) })
+      aliens.forEach(a => { if (alienImg.complete) ctx.drawImage(alienImg, a.x, a.y, a.w, a.h) })
 
-      // BULLETS
-      ctx.fillStyle = 'yellow'
-      bullets.forEach(b => ctx.fillRect(b.x, b.y, b.w!, b.h!))
+      bullets.forEach(b => { ctx.fillStyle = 'yellow'; ctx.fillRect(b.x, b.y, b.w, b.h) })
+      enemyBullets.forEach(b => { ctx.fillStyle = 'orange'; ctx.fillRect(b.x, b.y, b.w, b.h) })
 
-      // ASTEROIDS
-      ctx.fillStyle = 'gray'
-      asteroids.forEach(a => ctx.fillRect(a.x, a.y, a.w, a.h))
-
-      // ALIENS
-      ctx.fillStyle = 'red'
-      aliens.forEach(a => ctx.fillRect(a.x, a.y, a.w, a.h))
-
-      // ENEMY BULLETS
-      ctx.fillStyle = 'orange'
-      enemyBullets.forEach(b => ctx.fillRect(b.x, b.y, b.w!, b.h!))
-
-      // GAME OVER
       if (gameOver) {
-        ctx.fillStyle = 'red'
-        ctx.font = '48px Arial'
         ctx.textAlign = 'center'
-        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 40)
-
-        if (newRecord) {
-          ctx.fillStyle = 'gold'
-          ctx.font = '36px Arial'
-          ctx.fillText(`🎉 НОВЫЙ РЕКОРД! LVL ${level} 🎯 ${tokens}`, canvas.width / 2, canvas.height / 2 + 20)
-        } else {
-          const bestScore = localStorage.getItem('bestScore')
-          const bestLevel = localStorage.getItem('bestLevel')
-          ctx.fillStyle = 'white'
-          ctx.font = '28px Arial'
-          ctx.fillText(`РЕКОРД: LVL ${bestLevel} 🎯 ${bestScore}`, canvas.width / 2, canvas.height / 2 + 20)
-        }
+        ctx.fillStyle = 'red'
+        ctx.font = '52px Arial'
+        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2)
       }
     }
 
-    function loop() {
+    const loop = () => {
       update()
       draw()
       requestAnimationFrame(loop)
     }
-
     loop()
 
     return () => {
-      window.removeEventListener('keydown', down)
-      window.removeEventListener('keyup', up)
-      window.removeEventListener('resize', resizeCanvas)
+      window.removeEventListener('resize', resize)
+      window.removeEventListener('keydown', kd)
+      window.removeEventListener('keyup', ku)
     }
-  }, [started, restartKey, mobileControls])
+  }, [started, restartKey])
 
   return (
-    <div style={{ position: 'fixed', inset: 0, overflow: 'hidden', background: 'black' }}>
-      {!started && !isGameOver && <button onClick={() => setStarted(true)} style={btnStyle}>🚀 START</button>}
-      {isGameOver && (
-        <button onClick={() => { setRestartKey(v => v + 1); setStarted(true) }} style={{ ...btnStyle, top: '60%' }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'black', overflow: 'hidden' }}>
+      {!started && (
+        <button style={btn} onClick={() => setStarted(true)}>🚀 START</button>
+      )}
+
+      {gameOverUI && (
+        <button style={{ ...btn, top: '60%' }} onClick={() => { setRestartKey(v => v + 1); setGameOverUI(false); setStarted(true) }}>
           🔁 ИГРАТЬ СНОВА
         </button>
       )}
-      <canvas ref={canvasRef} style={{ display: 'block' }} />
+
+      <canvas ref={canvasRef} />
 
       {/* MOBILE CONTROLS */}
-      {started && !isGameOver && window.innerWidth < 768 && (
-        <div style={mobileControlsContainer}>
+      {typeof window !== 'undefined' && window.innerWidth < 768 && (
+        <div style={mobilePanel}>
           <button
-            style={mobileBtn}
-            onTouchStart={() => setMobileControls(c => ({ ...c, left: true }))}
-            onTouchEnd={() => setMobileControls(c => ({ ...c, left: false }))}
-          >⬅️</button>
+            style={ctrlBtn}
+            onTouchStart={() => (mobileControls.current.left = true)}
+            onTouchEnd={() => (mobileControls.current.left = false)}
+          >
+            ◀
+          </button>
           <button
-            style={mobileBtn}
-            onTouchStart={() => setMobileControls(c => ({ ...c, shoot: true }))}
-            onTouchEnd={() => setMobileControls(c => ({ ...c, shoot: false }))}
-          >🔥</button>
+            style={ctrlBtn}
+            onTouchStart={() => (mobileControls.current.shoot = true)}
+            onTouchEnd={() => (mobileControls.current.shoot = false)}
+          >
+            🔥
+          </button>
           <button
-            style={mobileBtn}
-            onTouchStart={() => setMobileControls(c => ({ ...c, right: true }))}
-            onTouchEnd={() => setMobileControls(c => ({ ...c, right: false }))}
-          >➡️</button>
+            style={ctrlBtn}
+            onTouchStart={() => (mobileControls.current.right = true)}
+            onTouchEnd={() => (mobileControls.current.right = false)}
+          >
+            ▶
+          </button>
         </div>
       )}
     </div>
   )
 }
 
-const btnStyle: React.CSSProperties = {
+const btn: React.CSSProperties = {
   position: 'absolute',
   top: '50%',
   left: '50%',
-  transform: 'translate(-50%, -50%)',
-  padding: '15px 40px',
+  transform: 'translate(-50%,-50%)',
+  padding: '18px 50px',
   fontSize: 22,
-  cursor: 'pointer',
   zIndex: 10,
 }
 
-const mobileControlsContainer: React.CSSProperties = {
+const mobilePanel: React.CSSProperties = {
   position: 'absolute',
-  bottom: 10,
-  left: '50%',
-  transform: 'translateX(-50%)',
+  bottom: 20,
+  left: 0,
+  width: '100%',
   display: 'flex',
-  gap: 15,
-  zIndex: 10,
+  justifyContent: 'space-around',
+  zIndex: 20,
 }
 
-const mobileBtn: React.CSSProperties = {
-  width: 60,
-  height: 60,
+const ctrlBtn: React.CSSProperties = {
+  width: 70,
+  height: 70,
+  fontSize: 28,
   borderRadius: '50%',
-  fontSize: 24,
-  opacity: 0.7,
-  background: '#333',
-  color: 'white',
-  border: 'none',
-  touchAction: 'none',
+  background: '#222',
+  color: '#fff',
+  border: '2px solid #555',
 }
