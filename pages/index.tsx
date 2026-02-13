@@ -2,6 +2,26 @@
 
 import { useEffect, useRef, useState } from 'react'
 
+export const metadata = {
+  title: 'CrashMod',
+  description: 'CrashMod — лучшие моды и хаки для игр',
+  openGraph: {
+    title: 'CrashMod',
+    description: 'CrashMod — лучшие моды и хаки для игр',
+    url: 'https://crashmod.example.com',
+    siteName: 'CrashMod',
+    images: [{ url: '/logo.png', width: 800, height: 600 }],
+    locale: 'ru_RU',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'CrashMod',
+    description: 'CrashMod — лучшие моды и хаки для игр',
+    images: ['/logo.png'],
+  },
+}
+
 export default function SpaceGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const mobileControls = useRef({ left: false, right: false, shoot: false })
@@ -25,7 +45,7 @@ export default function SpaceGame() {
 
     const isMobile = window.innerWidth < 768
     const scale = isMobile ? 0.6 : 0.85
-    const mobileBottomOffset = isMobile ? 100 : 0 // пространство для кнопок снизу
+    const mobileBottomOffset = isMobile ? 100 : 0 // место для кнопок снизу
 
     /* ===== IMAGES ===== */
     const shipImg = new Image()
@@ -35,6 +55,10 @@ export default function SpaceGame() {
     alienImg.src = '/game/alien.png'
     asteroidImg.src = '/game/asteroid.png'
     ctx.imageSmoothingEnabled = true
+
+    /* ===== SOUNDS ===== */
+    const shootSound = new Audio('/sounds/shoot.mp3')
+    shootSound.volume = 0.5
 
     /* ===== GAME STATE ===== */
     let lives = 5
@@ -56,7 +80,7 @@ export default function SpaceGame() {
 
     const player = {
       x: canvas.width / 2 - sizes.ship / 2,
-      y: canvas.height - sizes.ship - 30 - mobileBottomOffset, // вот тут сдвиг
+      y: canvas.height - sizes.ship - 30 - mobileBottomOffset,
       w: sizes.ship,
       h: sizes.ship,
       speed: (isMobile ? 6 : 8) * scale,
@@ -123,20 +147,23 @@ export default function SpaceGame() {
         h: sizes.bulletH,
         speed: 10,
       })
+
+      // звук при каждом выстреле
+      shootSound.currentTime = 0
+      shootSound.play()
     }
 
     function update() {
       if (gameOver) return
       if (shootCD > 0) shootCD--
 
-      if ((keys.ArrowLeft || mobileControls.current.left) && player.x > 0)
-        player.x -= player.speed
+      if ((keys.ArrowLeft || mobileControls.current.left) && player.x > 0) player.x -= player.speed
       if ((keys.ArrowRight || mobileControls.current.right) && player.x + player.w < canvas.width)
         player.x += player.speed
 
       if ((keys.Space || mobileControls.current.shoot) && shootCD === 0) {
         shoot()
-        shootCD = 12
+        shootCD = 6 // быстрее повтор при удержании
       }
 
       if (Math.random() < 0.02 + level * 0.003) spawnAsteroid()
@@ -247,12 +274,13 @@ export default function SpaceGame() {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'black', overflow: 'hidden' }}>
-      {!started && (
-        <button style={btn} onClick={() => setStarted(true)}>🚀 START</button>
-      )}
+      {!started && <button style={btn} onClick={() => setStarted(true)}>🚀 START</button>}
 
       {gameOverUI && (
-        <button style={{ ...btn, top: '60%' }} onClick={() => { setRestartKey(v => v + 1); setGameOverUI(false); setStarted(true) }}>
+        <button
+          style={{ ...btn, top: '60%' }}
+          onClick={() => { setRestartKey(v => v + 1); setGameOverUI(false); setStarted(true) }}
+        >
           🔁 ИГРАТЬ СНОВА
         </button>
       )}
